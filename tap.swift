@@ -1,4 +1,4 @@
-// System-audio capture helper for the pomodoro visualizer (macOS 14.4+).
+// System-audio capture helper for the understory visualizer (macOS 14.4+).
 //
 // Opens a global Core Audio process tap on the system output — no loopback
 // driver needed — and streams to stdout:
@@ -28,14 +28,14 @@ func responsibility_spawnattrs_setdisclaim(_ attrs: UnsafeMutablePointer<posix_s
 // NSAudioCaptureUsageDescription — tccd then refuses to prompt at all. Re-exec
 // disclaimed (private API, the Chromium trick) so this binary, with its
 // embedded __info_plist, is its own TCC subject and the prompt can fire.
-if ProcessInfo.processInfo.environment["POMODORO_TAP_DISCLAIMED"] == nil {
+if ProcessInfo.processInfo.environment["UNDERSTORY_TAP_DISCLAIMED"] == nil {
     var attrs: posix_spawnattr_t?
     posix_spawnattr_init(&attrs)
     _ = responsibility_spawnattrs_setdisclaim(&attrs, 1)
     posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETEXEC))
     let path = Bundle.main.executablePath ?? CommandLine.arguments[0]
     var argv: [UnsafeMutablePointer<CChar>?] = [strdup(path), nil]
-    var env: [UnsafeMutablePointer<CChar>?] = [strdup("POMODORO_TAP_DISCLAIMED=1"), nil]
+    var env: [UnsafeMutablePointer<CChar>?] = [strdup("UNDERSTORY_TAP_DISCLAIMED=1"), nil]
     var pid: pid_t = 0
     // POSIX_SPAWN_SETEXEC replaces this image; returning means it failed.
     let rc = posix_spawn(&pid, path, nil, &attrs, &argv, &env)
@@ -51,7 +51,7 @@ check(AudioHardwareCreateProcessTap(tapDesc, &tapID),
 
 // Wrap the tap in a private aggregate device so an IO proc can pull from it.
 let aggDesc: [String: Any] = [
-    kAudioAggregateDeviceNameKey: "pomodoro-tap",
+    kAudioAggregateDeviceNameKey: "understory-tap",
     kAudioAggregateDeviceUIDKey: UUID().uuidString,
     kAudioAggregateDeviceIsPrivateKey: true,
     kAudioAggregateDeviceTapAutoStartKey: true,

@@ -450,7 +450,7 @@ func (m model) View() string {
 
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(colTitle)).Bold(true).
-		Render("P O M O D O R O")
+		Render("U N D E R S T O R Y")
 
 	var label string
 	labelStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
@@ -776,9 +776,9 @@ func clamp(v, lo, hi int) int {
 func statePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".pomodoro.json"
+		return ".understory.json"
 	}
-	return filepath.Join(home, ".pomodoro.json")
+	return filepath.Join(home, ".understory.json")
 }
 
 func today() string { return time.Now().Format("2006-01-02") }
@@ -812,6 +812,11 @@ type session struct {
 
 func load() persisted {
 	data, err := os.ReadFile(statePath())
+	if err != nil { // migrate: state file from before the understory rename
+		if home, herr := os.UserHomeDir(); herr == nil {
+			data, err = os.ReadFile(filepath.Join(home, ".pomodoro.json"))
+		}
+	}
 	if err != nil {
 		return persisted{Stats: stats{Date: today()}, Links: map[string]taskLink{}}
 	}

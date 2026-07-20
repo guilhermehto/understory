@@ -1,11 +1,11 @@
-# pomodoro
+# understory
 
-A terminal pomodoro timer with Taskwarrior tracking and an audio-reactive spectrum visualizer. Big ASCII clock, classic 25/5/15 cycle, long break every 4 focus sessions. State persists to `~/.pomodoro.json`: stats, task links, the current task, whether the visualizer is on, and any in-flight session - quitting mid-session acts as pause, and the next launch resumes where you left off.
+A terminal pomodoro timer with Taskwarrior tracking and an audio-reactive spectrum visualizer. Big ASCII clock, classic 25/5/15 cycle, long break every 4 focus sessions. State persists to `~/.understory.json`: stats, task links, the current task, whether the visualizer is on, and any in-flight session - quitting mid-session acts as pause, and the next launch resumes where you left off.
 
 ## Build and run
 
 ```
-go build -o pomodoro . && ./pomodoro
+go build -o understory . && ./understory
 ```
 
 Or `go run .`. No cgo, no setup for the timer itself.
@@ -29,10 +29,10 @@ In the task view: `↑`/`↓` move, `enter` set current task, `d` mark done, `a`
 
 Needs the `task` CLI (`brew install task`). The task view lists your pending tasks by urgency. Pick one as the current task, mark tasks done, add new ones, edit description/project/tags.
 
-Each completed focus session credits one pomodoro to the current task plus anything you marked done that session, stored locally in `~/.pomodoro.json`. Nothing is written back to Taskwarrior except the done/add/edit actions you take yourself.
+Each completed focus session credits one pomodoro to the current task plus anything you marked done that session, stored locally in `~/.understory.json`. Nothing is written back to Taskwarrior except the done/add/edit actions you take yourself.
 
 ## Visualizer (macOS 14.4+)
 
 Press `v`. The app taps the system audio output directly through a Core Audio process tap — no loopback driver, no ffmpeg, nothing to install or reboot. Volume keys keep working and it hears exactly what you hear.
 
-First press compiles a small Swift helper into `~/Library/Caches/pomodoro/` (needs the Xcode command line tools: `xcode-select --install`) and triggers the System Audio Recording permission prompt — allow it. Manage the permission later under System Settings → Privacy & Security → Screen & System Audio Recording.
+First press compiles a small Swift helper into `~/Library/Caches/understory/` (needs the Xcode command line tools: `xcode-select --install`) and triggers the System Audio Recording permission prompt — allow it. Manage the permission later under System Settings → Privacy & Security → Screen & System Audio Recording.

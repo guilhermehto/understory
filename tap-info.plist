@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>dev.pomodoro.tap</string>
+	<string>dev.understory.tap</string>
 	<key>CFBundleName</key>
-	<string>pomodoro-tap</string>
+	<string>understory-tap</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>The pomodoro visualizer reads the system audio mix to draw its spectrum bars.</string>
+	<string>The understory visualizer reads the system audio mix to draw its spectrum bars.</string>
 </dict>
 </plist>
