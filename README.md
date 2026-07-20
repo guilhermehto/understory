@@ -1,6 +1,6 @@
 # pomodoro
 
-A terminal pomodoro timer with Taskwarrior tracking and an audio-reactive spectrum visualizer. Big ASCII clock, classic 25/5/15 cycle, long break every 4 focus sessions. Stats, task links, and any in-flight session persist to `~/.pomodoro.json` - quitting mid-session acts as pause, and the next launch resumes where you left off.
+A terminal pomodoro timer with Taskwarrior tracking and an audio-reactive spectrum visualizer. Big ASCII clock, classic 25/5/15 cycle, long break every 4 focus sessions. State persists to `~/.pomodoro.json`: stats, task links, the current task, whether the visualizer is on, and any in-flight session - quitting mid-session acts as pause, and the next launch resumes where you left off.
 
 ## Build and run
 

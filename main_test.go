@@ -78,52 +78,70 @@ func TestCreditTasksCurrentPlusDoneBlock(t *testing.T) {
 
 func TestDecodeStateMigratesOldFormat(t *testing.T) {
 	old := []byte(`{"total":10,"today":3,"date":"` + today() + `"}`)
-	s, links, sess := decodeState(old)
-	if s.Total != 10 || s.Today != 3 {
-		t.Errorf("old-format stats lost: %+v", s)
+	p := decodeState(old)
+	if p.Stats.Total != 10 || p.Stats.Today != 3 {
+		t.Errorf("old-format stats lost: %+v", p.Stats)
 	}
-	if links == nil || len(links) != 0 {
-		t.Errorf("links should be empty non-nil, got %v", links)
+	if p.Links == nil || len(p.Links) != 0 {
+		t.Errorf("links should be empty non-nil, got %v", p.Links)
 	}
-	if sess != nil {
-		t.Errorf("old format should carry no session, got %+v", sess)
+	if p.Session != nil {
+		t.Errorf("old format should carry no session, got %+v", p.Session)
 	}
 
-	newFmt := []byte(`{"stats":{"total":5,"today":2,"date":"` + today() + `"},"links":{"u1":{"description":"x","pomodoros":4,"last_worked":"` + today() + `"}},"session":{"phase":1,"remaining_sec":90,"cycle":2}}`)
-	s2, links2, sess2 := decodeState(newFmt)
-	if s2.Total != 5 || s2.Today != 2 {
-		t.Errorf("new-format stats wrong: %+v", s2)
+	newFmt := []byte(`{"stats":{"total":5,"today":2,"date":"` + today() + `"},"links":{"u1":{"description":"x","pomodoros":4,"last_worked":"` + today() + `"}},"session":{"phase":1,"remaining_sec":90,"cycle":2},"current_uuid":"u1","current_desc":"x","visualizer":true}`)
+	p2 := decodeState(newFmt)
+	if p2.Stats.Total != 5 || p2.Stats.Today != 2 {
+		t.Errorf("new-format stats wrong: %+v", p2.Stats)
 	}
-	if links2["u1"].Pomodoros != 4 {
-		t.Errorf("new-format links wrong: %+v", links2)
+	if p2.Links["u1"].Pomodoros != 4 {
+		t.Errorf("new-format links wrong: %+v", p2.Links)
 	}
-	if sess2 == nil || sess2.Phase != shortBreak || sess2.RemainingSec != 90 || sess2.Cycle != 2 {
-		t.Errorf("session wrong: %+v", sess2)
+	if p2.Session == nil || p2.Session.Phase != shortBreak || p2.Session.RemainingSec != 90 || p2.Session.Cycle != 2 {
+		t.Errorf("session wrong: %+v", p2.Session)
+	}
+	if p2.CurrentUUID != "u1" || p2.CurrentDesc != "x" || !p2.Visualizer {
+		t.Errorf("app state wrong: %+v", p2)
 	}
 }
 
 // Quit acts as pause: a saved session resumes paused with its remaining time,
-// clamped to the (possibly shrunk) phase duration.
+// clamped to the (possibly shrunk) phase duration. Current task and visualizer
+// state come back regardless of whether a timer was in flight.
 func TestRestoreSession(t *testing.T) {
 	base := model{durations: [3]time.Duration{25 * time.Minute, 5 * time.Minute, 15 * time.Minute}, ph: focus, status: idle}
 	base.remaining = base.dur(focus)
 
 	m := base
-	m.restore(&session{Phase: shortBreak, RemainingSec: 90, Cycle: 2})
+	m.restore(persisted{
+		Session:     &session{Phase: shortBreak, RemainingSec: 90, Cycle: 2},
+		CurrentUUID: "u1", CurrentDesc: "write docs", Visualizer: true,
+	})
 	if m.ph != shortBreak || m.status != paused || m.remaining != 90*time.Second || m.cycle != 2 {
 		t.Errorf("restore = phase %v status %v remaining %v cycle %d", m.ph, m.status, m.remaining, m.cycle)
 	}
+	if m.curUUID != "u1" || m.curDesc != "write docs" || !m.resumeViz {
+		t.Errorf("app state not restored: uuid=%q desc=%q viz=%v", m.curUUID, m.curDesc, m.resumeViz)
+	}
 
 	m = base
-	m.restore(&session{Phase: focus, RemainingSec: 3600, Cycle: 0}) // saved before -work shrank
+	m.restore(persisted{Session: &session{Phase: focus, RemainingSec: 3600}}) // saved before -work shrank
 	if m.remaining != 25*time.Minute {
 		t.Errorf("remaining not clamped: %v", m.remaining)
 	}
 
 	m = base
-	m.restore(nil)
-	m.restore(&session{Phase: 9, RemainingSec: 60})
-	m.restore(&session{Phase: focus, RemainingSec: 0})
+	m.restore(persisted{CurrentUUID: "u2", Visualizer: true}) // no timer in flight
+	if m.ph != focus || m.status != idle || m.remaining != 25*time.Minute {
+		t.Errorf("sessionless restore mutated timer: %+v", m)
+	}
+	if m.curUUID != "u2" || !m.resumeViz {
+		t.Errorf("sessionless restore dropped app state: %+v", m)
+	}
+
+	m = base
+	m.restore(persisted{Session: &session{Phase: 9, RemainingSec: 60}})
+	m.restore(persisted{Session: &session{Phase: focus, RemainingSec: 0}})
 	if m.ph != focus || m.status != idle || m.remaining != 25*time.Minute {
 		t.Errorf("invalid sessions mutated model: %+v", m)
 	}

@@ -126,6 +126,7 @@ type model struct {
 
 	// audio visualizer
 	capturing bool
+	resumeViz bool      // visualizer was on at last quit; Init restarts it
 	levels    []float64 // smoothed spectrum band levels, 0..1
 	bands     chan audioFrame
 	cancel    context.CancelFunc
@@ -181,7 +182,13 @@ func tick() tea.Cmd {
 	return tea.Tick(time.Second/10, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func (m model) Init() tea.Cmd { return tick() }
+func (m *model) Init() tea.Cmd {
+	if m.resumeViz {
+		m.resumeViz = false
+		return tea.Batch(tick(), m.toggleAudio())
+	}
+	return tick()
+}
 
 func (m model) dur(p phase) time.Duration { return m.durations[p] }
 
@@ -298,8 +305,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			m.save() // before stopCapture: save records the live visualizer state
 			m.stopCapture()
-			m.save()
 			return m, tea.Quit
 		}
 		if m.input {
@@ -312,8 +319,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "esc":
-			m.stopCapture()
 			m.save()
+			m.stopCapture()
 			return m, tea.Quit
 		case " ", "enter":
 			switch m.status {
@@ -784,12 +791,15 @@ func (m *model) rollDate() {
 	}
 }
 
-// persisted is the on-disk shape: stats, local task links, and any in-flight
-// timer session.
+// persisted is the on-disk shape: stats, local task links, any in-flight timer
+// session, and app state (current task, visualizer) restored on next launch.
 type persisted struct {
-	Stats   stats               `json:"stats"`
-	Links   map[string]taskLink `json:"links"`
-	Session *session            `json:"session,omitempty"`
+	Stats       stats               `json:"stats"`
+	Links       map[string]taskLink `json:"links"`
+	Session     *session            `json:"session,omitempty"`
+	CurrentUUID string              `json:"current_uuid,omitempty"`
+	CurrentDesc string              `json:"current_desc,omitempty"`
+	Visualizer  bool                `json:"visualizer,omitempty"`
 }
 
 // session snapshots an in-flight timer. Quit acts as pause: the clock doesn't
@@ -800,39 +810,38 @@ type session struct {
 	Cycle        int   `json:"cycle"`
 }
 
-func load() (stats, map[string]taskLink, *session) {
+func load() persisted {
 	data, err := os.ReadFile(statePath())
 	if err != nil {
-		return stats{Date: today()}, map[string]taskLink{}, nil
+		return persisted{Stats: stats{Date: today()}, Links: map[string]taskLink{}}
 	}
 	return decodeState(data)
 }
 
 // decodeState parses the state file, transparently migrating the old
 // stats-only format (bare {total,today,date}) to the current nested shape.
-func decodeState(data []byte) (stats, map[string]taskLink, *session) {
-	s := stats{Date: today()}
-	links := map[string]taskLink{}
-	var sess *session
+func decodeState(data []byte) persisted {
 	var p persisted
-	if json.Unmarshal(data, &p) == nil && (p.Stats != (stats{}) || len(p.Links) > 0) {
-		s = p.Stats
-		if p.Links != nil {
-			links = p.Links
-		}
-		sess = p.Session
-	} else { // old format: bare stats object
-		_ = json.Unmarshal(data, &s)
+	if json.Unmarshal(data, &p) != nil || (p.Stats == (stats{}) && len(p.Links) == 0) {
+		p = persisted{} // old format: bare stats object
+		_ = json.Unmarshal(data, &p.Stats)
 	}
-	if s.Date != today() { // stale day → keep total, reset today
-		s.Date = today()
-		s.Today = 0
+	if p.Links == nil {
+		p.Links = map[string]taskLink{}
 	}
-	return s, links, sess
+	if p.Stats.Date != today() { // stale day → keep total, reset today
+		p.Stats.Date = today()
+		p.Stats.Today = 0
+	}
+	return p
 }
 
 func (m model) save() {
-	p := persisted{Stats: m.stats, Links: m.links}
+	p := persisted{
+		Stats: m.stats, Links: m.links,
+		CurrentUUID: m.curUUID, CurrentDesc: m.curDesc,
+		Visualizer: m.capturing,
+	}
 	if sec := int(m.remaining.Round(time.Second) / time.Second); sec > 0 && (m.status == running || m.status == paused) {
 		p.Session = &session{Phase: m.ph, RemainingSec: sec, Cycle: m.cycle}
 	}
@@ -843,9 +852,13 @@ func (m model) save() {
 	_ = os.WriteFile(statePath(), data, 0o644)
 }
 
-// restore resumes a saved in-flight session as paused (quit == pause). Bad or
-// oversized values (e.g. durations shrunk via flags) are clamped or ignored.
-func (m *model) restore(s *session) {
+// restore reapplies saved app state: current task, visualizer, and any
+// in-flight session resumed as paused (quit == pause). Bad or oversized
+// session values (e.g. durations shrunk via flags) are clamped or ignored.
+func (m *model) restore(p persisted) {
+	m.curUUID, m.curDesc = p.CurrentUUID, p.CurrentDesc
+	m.resumeViz = p.Visualizer
+	s := p.Session
 	if s == nil || s.Phase < focus || s.Phase > longBreak || s.RemainingSec <= 0 {
 		return
 	}
@@ -864,17 +877,17 @@ func main() {
 	long := flag.Int("long", 15, "long break minutes")
 	flag.Parse()
 
-	st, links, sess := load()
+	p := load()
 	m := model{
 		ph:        focus,
 		status:    idle,
 		durations: [3]time.Duration{minutes(*work), minutes(*short), minutes(*long)},
-		stats:     st,
-		links:     links,
+		stats:     p.Stats,
+		links:     p.Links,
 		doneBlock: map[string]string{},
 	}
 	m.remaining = m.dur(focus)
-	m.restore(sess)
+	m.restore(p)
 
 	if _, err := tea.NewProgram(&m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
