@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
 	"math"
 	"math/cmplx"
-	"os/exec"
 	"strings"
 	"testing"
 )
@@ -26,38 +24,6 @@ func TestFFTPeak(t *testing.T) {
 	}
 	if peak != k {
 		t.Fatalf("peak bin = %d, want %d", peak, k)
-	}
-}
-
-func TestParseAudioDevices(t *testing.T) {
-	const out = `[AVFoundation indev @ 0x] AVFoundation video devices:
-[AVFoundation indev @ 0x] [0] FaceTime HD Camera
-[AVFoundation indev @ 0x] [1] Capture screen 0
-[AVFoundation indev @ 0x] AVFoundation audio devices:
-[AVFoundation indev @ 0x] [0] LoomAudioDevice
-[AVFoundation indev @ 0x] [2] MacBook Pro Microphone
-[AVFoundation indev @ 0x] [5] HyperX Quadcast`
-
-	devs := parseAudioDevices(out)
-	if devs[0] != "LoomAudioDevice" {
-		t.Errorf("idx0 = %q", devs[0])
-	}
-	if devs[2] != "MacBook Pro Microphone" {
-		t.Errorf("idx2 = %q", devs[2])
-	}
-	if devs[5] != "HyperX Quadcast" {
-		t.Errorf("idx5 = %q", devs[5])
-	}
-	for _, d := range devs {
-		if strings.Contains(d, "FaceTime") { // video devices must not leak in
-			t.Fatalf("video device leaked into audio list: %q", d)
-		}
-	}
-	if got := findDevice(devs, "microphone"); got != 2 {
-		t.Errorf("findDevice(microphone) = %d, want 2", got)
-	}
-	if got := findDevice(devs, "blackhole"); got != -1 {
-		t.Errorf("findDevice(blackhole) = %d, want -1", got)
 	}
 }
 
@@ -87,29 +53,22 @@ func TestRenderSpectrumShape(t *testing.T) {
 	}
 }
 
-// TestPipelineTone drives the full PCM-parse → FFT → band pipeline with a real
-// 1kHz tone from ffmpeg and asserts the loudest band is where 1kHz lands.
+// TestPipelineTone drives the full PCM-parse → FFT → band pipeline with a
+// synthetic 1kHz f32le tone and asserts the loudest band is where 1kHz lands.
 func TestPipelineTone(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not installed")
-	}
-	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
-		"-f", "lavfi", "-i", "sine=frequency=1000:duration=1",
-		"-f", "f32le", "-ac", "1", "-ar", "44100", "-")
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("ffmpeg: %v", err)
+	const rate, ns = 44100, 44100
+	data := make([]byte, ns*4)
+	for i := range ns {
+		s := float32(math.Sin(2 * math.Pi * 1000 * float64(i) / rate))
+		binary.LittleEndian.PutUint32(data[i*4:], math.Float32bits(s))
 	}
 
-	data := buf.Bytes()
-	ns := len(data) / 4
 	samples := make([]float64, ns)
-	for i := 0; i < ns; i++ {
+	for i := range ns {
 		samples[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:])))
 	}
 
-	an := newAnalyzer()
+	an := newAnalyzer(rate)
 	acc := make([]float64, numBands)
 	for off := 0; off+fftSize <= ns; off += fftSize {
 		for i, v := range an.bands(samples[off : off+fftSize]) {

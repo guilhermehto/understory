@@ -1,23 +1,31 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"math/cmplx"
+	"os"
 	"os/exec"
-	"regexp"
-	"strconv"
+	"path/filepath"
 	"strings"
 )
 
 const (
-	sampleRate = 44100
-	fftSize    = 1024 // ~43 frames/sec at 44.1kHz
-	numBands   = 64
+	fftSize  = 1024 // ~46 frames/sec at 48kHz
+	numBands = 64
 )
+
+//go:embed tap.swift
+var tapSource []byte
+
+//go:embed tap-info.plist
+var tapPlist []byte
 
 // audioFrame carries one analysed spectrum frame, or a terminal error.
 type audioFrame struct {
@@ -25,17 +33,58 @@ type audioFrame struct {
 	err    error
 }
 
-// captureAudio pipes mono PCM out of ffmpeg (avfoundation), analyses each block
-// into log-spaced spectrum bands, and streams frames on out until ctx is
-// cancelled or ffmpeg dies. Non-blocking sends drop frames if the UI is busy —
-// a visualizer wants the latest frame, not a backlog.
-func captureAudio(ctx context.Context, device string, out chan<- audioFrame) {
+// tapHelper returns the compiled system-audio capture helper, building it with
+// swiftc on first use or when the embedded source changed. The binary path is
+// stable so the System Audio Recording grant keyed to it survives reruns.
+func tapHelper() (string, error) {
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(cacheRoot, "pomodoro")
+	bin := filepath.Join(dir, "tap")
+	src := filepath.Join(dir, "tap.swift")
+	plist := filepath.Join(dir, "tap-info.plist")
+
+	if old, err := os.ReadFile(src); err == nil && bytes.Equal(old, tapSource) {
+		if _, err := os.Stat(bin); err == nil {
+			return bin, nil
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(src, tapSource, 0o644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(plist, tapPlist, 0o644); err != nil {
+		return "", err
+	}
+	out, err := exec.Command("swiftc", "-O", src, "-o", bin,
+		"-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
+		"-Xlinker", "__info_plist", "-Xlinker", plist).CombinedOutput()
+	if err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return "", errors.New("compiling audio helper: " + msg)
+		}
+		return "", fmt.Errorf("compiling audio helper (needs Xcode command line tools): %w", err)
+	}
+	return bin, nil
+}
+
+// captureAudio streams the system-audio mix from the tap helper, analyses each
+// block into log-spaced spectrum bands, and sends frames on out until ctx is
+// cancelled or the helper dies. Non-blocking sends drop frames if the UI is
+// busy — a visualizer wants the latest frame, not a backlog.
+func captureAudio(ctx context.Context, out chan<- audioFrame) {
 	defer close(out)
 
-	cmd := exec.CommandContext(ctx, "ffmpeg",
-		"-hide_banner", "-loglevel", "error",
-		"-f", "avfoundation", "-i", ":"+device,
-		"-f", "f32le", "-ac", "1", "-ar", strconv.Itoa(sampleRate), "-")
+	bin, err := tapHelper()
+	if err != nil {
+		out <- audioFrame{err: err}
+		return
+	}
+	cmd := exec.CommandContext(ctx, bin)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		out <- audioFrame{err: err}
@@ -47,28 +96,38 @@ func captureAudio(ctx context.Context, device string, out chan<- audioFrame) {
 		out <- audioFrame{err: err}
 		return
 	}
+	die := func(readErr error) {
+		werr := cmd.Wait()
+		if ctx.Err() != nil {
+			return // user toggled off — not an error
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" && werr != nil {
+			msg = werr.Error()
+		}
+		if msg == "" {
+			msg = readErr.Error()
+		}
+		out <- audioFrame{err: errors.New(msg)}
+	}
 
-	an := newAnalyzer()
+	// 4-byte header: the tap's native sample rate (whatever the output device
+	// runs at), then endless mono f32le PCM.
+	var hdr [4]byte
+	if _, err := io.ReadFull(stdout, hdr[:]); err != nil {
+		die(err)
+		return
+	}
+	an := newAnalyzer(float64(binary.LittleEndian.Uint32(hdr[:])))
 	raw := make([]byte, fftSize*4)
 	samples := make([]float64, fftSize)
 
 	for {
 		if _, err := io.ReadFull(stdout, raw); err != nil {
-			werr := cmd.Wait()
-			if ctx.Err() != nil {
-				return // user toggled off — not an error
-			}
-			msg := strings.TrimSpace(stderr.String())
-			if msg == "" && werr != nil {
-				msg = werr.Error()
-			}
-			if msg == "" {
-				msg = err.Error()
-			}
-			out <- audioFrame{err: errors.New(msg)}
+			die(err)
 			return
 		}
-		for i := 0; i < fftSize; i++ {
+		for i := range fftSize {
 			samples[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:])))
 		}
 		select {
@@ -82,31 +141,32 @@ func captureAudio(ctx context.Context, device string, out chan<- audioFrame) {
 // current volume without a hand-tuned dB floor.
 type analyzer struct {
 	window     []float64
+	sampleRate float64
 	runningMax float64
 }
 
-func newAnalyzer() *analyzer {
+func newAnalyzer(rate float64) *analyzer {
 	w := make([]float64, fftSize)
 	for i := range w {
 		w[i] = 0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/float64(fftSize-1))
 	}
-	return &analyzer{window: w, runningMax: 1e-6}
+	return &analyzer{window: w, sampleRate: rate, runningMax: 1e-6}
 }
 
 func (a *analyzer) bands(samples []float64) []float64 {
 	buf := make([]complex128, fftSize)
-	for i := 0; i < fftSize; i++ {
+	for i := range fftSize {
 		buf[i] = complex(samples[i]*a.window[i], 0)
 	}
 	fft(buf)
 
 	half := fftSize / 2
-	binHz := float64(sampleRate) / float64(fftSize)
+	binHz := a.sampleRate / float64(fftSize)
 	const fmin, fmax = 40.0, 16000.0
 
 	bands := make([]float64, numBands)
 	frameMax := 1e-9
-	for b := 0; b < numBands; b++ {
+	for b := range numBands {
 		f0 := fmin * math.Pow(fmax/fmin, float64(b)/numBands)
 		f1 := fmin * math.Pow(fmax/fmin, float64(b+1)/numBands)
 		lo, hi := int(f0/binHz), int(f1/binHz)
@@ -164,97 +224,17 @@ func fft(x []complex128) {
 		}
 	}
 	for length := 2; length <= n; length <<= 1 {
-		wlen := cmplx.Rect(1, -2*math.Pi/float64(length))
+		ang := -2 * math.Pi / float64(length)
+		wl := cmplx.Rect(1, ang)
 		for i := 0; i < n; i += length {
 			w := complex(1, 0)
-			for k := 0; k < length/2; k++ {
-				u := x[i+k]
-				v := x[i+k+length/2] * w
-				x[i+k] = u + v
-				x[i+k+length/2] = u - v
-				w *= wlen
+			for j := range length / 2 {
+				u := x[i+j]
+				v := x[i+j+length/2] * w
+				x[i+j] = u + v
+				x[i+j+length/2] = u - v
+				w *= wl
 			}
 		}
 	}
-}
-
-// ── device discovery ──────────────────────────────────────────────────────
-
-var deviceLine = regexp.MustCompile(`\[(\d+)\]\s+(.*)$`)
-
-// listAudioDevices returns avfoundation input names indexed by ffmpeg's index
-// (gaps are empty strings).
-func listAudioDevices() []string {
-	cmd := exec.Command("ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", "")
-	var b strings.Builder
-	cmd.Stderr = &b
-	_ = cmd.Run() // always "errors" (no real input) — we only want the listing
-	return parseAudioDevices(b.String())
-}
-
-func parseAudioDevices(s string) []string {
-	var out []string
-	inAudio := false
-	for _, ln := range strings.Split(s, "\n") {
-		switch {
-		case strings.Contains(ln, "AVFoundation audio devices"):
-			inAudio = true
-			continue
-		case strings.Contains(ln, "AVFoundation video devices"):
-			inAudio = false
-			continue
-		}
-		if !inAudio {
-			continue
-		}
-		if m := deviceLine.FindStringSubmatch(ln); m != nil {
-			idx, _ := strconv.Atoi(m[1])
-			for len(out) <= idx {
-				out = append(out, "")
-			}
-			out[idx] = strings.TrimSpace(m[2])
-		}
-	}
-	return out
-}
-
-// resolveDevice picks an input: explicit flag (index or name substring) →
-// BlackHole (system audio) → any Microphone → first available.
-func resolveDevice(flag string) (index, name string, ok bool) {
-	devs := listAudioDevices()
-	pick := -1
-	if flag != "" {
-		if n, err := strconv.Atoi(flag); err == nil && n >= 0 && n < len(devs) && devs[n] != "" {
-			pick = n
-		} else {
-			pick = findDevice(devs, flag)
-		}
-	}
-	for _, want := range []string{"blackhole", "microphone"} {
-		if pick < 0 {
-			pick = findDevice(devs, want)
-		}
-	}
-	if pick < 0 {
-		for i, d := range devs {
-			if d != "" {
-				pick = i
-				break
-			}
-		}
-	}
-	if pick < 0 {
-		return "", "", false
-	}
-	return strconv.Itoa(pick), devs[pick], true
-}
-
-func findDevice(devs []string, sub string) int {
-	sub = strings.ToLower(sub)
-	for i, d := range devs {
-		if d != "" && strings.Contains(strings.ToLower(d), sub) {
-			return i
-		}
-	}
-	return -1
 }

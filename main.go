@@ -116,8 +116,8 @@ type model struct {
 	taskCursor int
 	curUUID    string // current task being worked on
 	curDesc    string
-	doneBlock  map[string]string    // uuid→desc marked done during this focus block
-	links      map[string]taskLink  // local pomodoro credits, persisted
+	doneBlock  map[string]string   // uuid→desc marked done during this focus block
+	links      map[string]taskLink // local pomodoro credits, persisted
 	taskErr    string
 	input      bool
 	inputKind  inputKind
@@ -125,10 +125,6 @@ type model struct {
 	inputUUID  string // task being edited
 
 	// audio visualizer
-	audioFlag string // -audio device override (index or name substring)
-	audioDev  string // resolved avfoundation index
-	audioName string // resolved device name (for display)
-	resolved  bool   // device lookup done (lazy, on first 'v')
 	capturing bool
 	levels    []float64 // smoothed spectrum band levels, 0..1
 	bands     chan audioFrame
@@ -166,25 +162,18 @@ func (m *model) stopCapture() {
 	m.capturing = false
 }
 
-// toggleAudio starts or stops the visualizer, resolving the device lazily so
-// startup stays instant and no mic-permission prompt fires until asked.
+// toggleAudio starts or stops the visualizer. First use compiles the capture
+// helper and fires the System Audio Recording permission prompt, so nothing
+// audio-related happens until 'v' is pressed.
 func (m *model) toggleAudio() tea.Cmd {
 	if m.capturing {
 		m.stopCapture()
 		return nil
 	}
-	if !m.resolved {
-		m.audioDev, m.audioName, _ = resolveDevice(m.audioFlag)
-		m.resolved = true
-	}
-	if m.audioDev == "" {
-		m.audioErr = "no audio input device found"
-		return nil
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan audioFrame)
 	m.cancel, m.bands, m.capturing, m.audioErr = cancel, ch, true, ""
-	go captureAudio(ctx, m.audioDev, ch)
+	go captureAudio(ctx, ch)
 	return waitForBands(ch)
 }
 
@@ -525,7 +514,7 @@ func (m model) audioStatus() string {
 			Render("audio: " + m.audioErr)
 	case m.capturing:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
-			Render("♪ listening · " + m.audioName)
+			Render("♪ listening · system audio")
 	default:
 		return ""
 	}
@@ -845,7 +834,6 @@ func main() {
 	work := flag.Int("work", 25, "focus minutes")
 	short := flag.Int("short", 5, "short break minutes")
 	long := flag.Int("long", 15, "long break minutes")
-	audio := flag.String("audio", "", "visualizer input device (index or name substring; default: BlackHole, else mic)")
 	flag.Parse()
 
 	st, links := load()
@@ -856,7 +844,6 @@ func main() {
 		stats:     st,
 		links:     links,
 		doneBlock: map[string]string{},
-		audioFlag: *audio,
 	}
 	m.remaining = m.dur(focus)
 
