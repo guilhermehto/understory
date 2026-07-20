@@ -784,31 +784,43 @@ func (m *model) rollDate() {
 	}
 }
 
-// persisted is the on-disk shape: stats plus local task links.
+// persisted is the on-disk shape: stats, local task links, and any in-flight
+// timer session.
 type persisted struct {
-	Stats stats               `json:"stats"`
-	Links map[string]taskLink `json:"links"`
+	Stats   stats               `json:"stats"`
+	Links   map[string]taskLink `json:"links"`
+	Session *session            `json:"session,omitempty"`
 }
 
-func load() (stats, map[string]taskLink) {
+// session snapshots an in-flight timer. Quit acts as pause: the clock doesn't
+// run while the app is closed, so remaining is the whole state - no timestamps.
+type session struct {
+	Phase        phase `json:"phase"`
+	RemainingSec int   `json:"remaining_sec"`
+	Cycle        int   `json:"cycle"`
+}
+
+func load() (stats, map[string]taskLink, *session) {
 	data, err := os.ReadFile(statePath())
 	if err != nil {
-		return stats{Date: today()}, map[string]taskLink{}
+		return stats{Date: today()}, map[string]taskLink{}, nil
 	}
 	return decodeState(data)
 }
 
 // decodeState parses the state file, transparently migrating the old
 // stats-only format (bare {total,today,date}) to the current nested shape.
-func decodeState(data []byte) (stats, map[string]taskLink) {
+func decodeState(data []byte) (stats, map[string]taskLink, *session) {
 	s := stats{Date: today()}
 	links := map[string]taskLink{}
+	var sess *session
 	var p persisted
 	if json.Unmarshal(data, &p) == nil && (p.Stats != (stats{}) || len(p.Links) > 0) {
 		s = p.Stats
 		if p.Links != nil {
 			links = p.Links
 		}
+		sess = p.Session
 	} else { // old format: bare stats object
 		_ = json.Unmarshal(data, &s)
 	}
@@ -816,15 +828,31 @@ func decodeState(data []byte) (stats, map[string]taskLink) {
 		s.Date = today()
 		s.Today = 0
 	}
-	return s, links
+	return s, links, sess
 }
 
 func (m model) save() {
-	data, err := json.MarshalIndent(persisted{Stats: m.stats, Links: m.links}, "", "  ")
+	p := persisted{Stats: m.stats, Links: m.links}
+	if sec := int(m.remaining.Round(time.Second) / time.Second); sec > 0 && (m.status == running || m.status == paused) {
+		p.Session = &session{Phase: m.ph, RemainingSec: sec, Cycle: m.cycle}
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return
 	}
 	_ = os.WriteFile(statePath(), data, 0o644)
+}
+
+// restore resumes a saved in-flight session as paused (quit == pause). Bad or
+// oversized values (e.g. durations shrunk via flags) are clamped or ignored.
+func (m *model) restore(s *session) {
+	if s == nil || s.Phase < focus || s.Phase > longBreak || s.RemainingSec <= 0 {
+		return
+	}
+	m.ph = s.Phase
+	m.cycle = max(s.Cycle, 0)
+	m.remaining = min(time.Duration(s.RemainingSec)*time.Second, m.dur(s.Phase))
+	m.status = paused
 }
 
 // ── main ──────────────────────────────────────────────────────────────────
@@ -836,7 +864,7 @@ func main() {
 	long := flag.Int("long", 15, "long break minutes")
 	flag.Parse()
 
-	st, links := load()
+	st, links, sess := load()
 	m := model{
 		ph:        focus,
 		status:    idle,
@@ -846,6 +874,7 @@ func main() {
 		doneBlock: map[string]string{},
 	}
 	m.remaining = m.dur(focus)
+	m.restore(sess)
 
 	if _, err := tea.NewProgram(&m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
