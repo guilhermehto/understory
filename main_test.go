@@ -25,10 +25,10 @@ func TestCadence(t *testing.T) {
 
 func TestFmtDuration(t *testing.T) {
 	cases := map[time.Duration]string{
-		25 * time.Minute:                   "25:00",
-		90 * time.Second:                   "01:30",
-		0:                                  "00:00",
-		-5 * time.Second:                   "00:00",
+		25 * time.Minute:                     "25:00",
+		90 * time.Second:                     "01:30",
+		0:                                    "00:00",
+		-5 * time.Second:                     "00:00",
 		time.Minute + 59500*time.Millisecond: "02:00", // rounds to nearest second
 	}
 	for d, want := range cases {
@@ -89,7 +89,7 @@ func TestDecodeStateMigratesOldFormat(t *testing.T) {
 		t.Errorf("old format should carry no session, got %+v", p.Session)
 	}
 
-	newFmt := []byte(`{"stats":{"total":5,"today":2,"date":"` + today() + `"},"links":{"u1":{"description":"x","pomodoros":4,"last_worked":"` + today() + `"}},"session":{"phase":1,"remaining_sec":90,"cycle":2},"current_uuid":"u1","current_desc":"x","visualizer":true}`)
+	newFmt := []byte(`{"stats":{"total":5,"today":2,"date":"` + today() + `"},"links":{"u1":{"description":"x","pomodoros":4,"last_worked":"` + today() + `"}},"session":{"phase":1,"remaining_sec":90,"cycle":2},"current_uuid":"u1","current_desc":"x","visualizer":true,"audio_perm":true}`)
 	p2 := decodeState(newFmt)
 	if p2.Stats.Total != 5 || p2.Stats.Today != 2 {
 		t.Errorf("new-format stats wrong: %+v", p2.Stats)
@@ -100,7 +100,7 @@ func TestDecodeStateMigratesOldFormat(t *testing.T) {
 	if p2.Session == nil || p2.Session.Phase != shortBreak || p2.Session.RemainingSec != 90 || p2.Session.Cycle != 2 {
 		t.Errorf("session wrong: %+v", p2.Session)
 	}
-	if p2.CurrentUUID != "u1" || p2.CurrentDesc != "x" || !p2.Visualizer {
+	if p2.CurrentUUID != "u1" || p2.CurrentDesc != "x" || !p2.Visualizer || !p2.AudioPerm {
 		t.Errorf("app state wrong: %+v", p2)
 	}
 }
@@ -115,13 +115,13 @@ func TestRestoreSession(t *testing.T) {
 	m := base
 	m.restore(persisted{
 		Session:     &session{Phase: shortBreak, RemainingSec: 90, Cycle: 2},
-		CurrentUUID: "u1", CurrentDesc: "write docs", Visualizer: true,
+		CurrentUUID: "u1", CurrentDesc: "write docs", Visualizer: true, AudioPerm: true,
 	})
 	if m.ph != shortBreak || m.status != paused || m.remaining != 90*time.Second || m.cycle != 2 {
 		t.Errorf("restore = phase %v status %v remaining %v cycle %d", m.ph, m.status, m.remaining, m.cycle)
 	}
-	if m.curUUID != "u1" || m.curDesc != "write docs" || !m.resumeViz {
-		t.Errorf("app state not restored: uuid=%q desc=%q viz=%v", m.curUUID, m.curDesc, m.resumeViz)
+	if m.curUUID != "u1" || m.curDesc != "write docs" || !m.resumeViz || !m.permOK {
+		t.Errorf("app state not restored: uuid=%q desc=%q viz=%v perm=%v", m.curUUID, m.curDesc, m.resumeViz, m.permOK)
 	}
 
 	m = base

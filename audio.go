@@ -42,7 +42,7 @@ func tapHelper() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(cacheRoot, "understory")
-	bin := filepath.Join(dir, "tap")
+	bin := filepath.Join(dir, "understory")
 	src := filepath.Join(dir, "tap.swift")
 	plist := filepath.Join(dir, "tap-info.plist")
 

@@ -5,7 +5,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>dev.understory.tap</string>
 	<key>CFBundleName</key>
-	<string>understory-tap</string>
+	<string>understory</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>The understory visualizer reads the system audio mix to draw its spectrum bars.</string>
 </dict>

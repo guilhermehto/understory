@@ -35,4 +35,4 @@ Each completed focus session credits one pomodoro to the current task plus anyth
 
 Press `v`. The app taps the system audio output directly through a Core Audio process tap — no loopback driver, no ffmpeg, nothing to install or reboot. Volume keys keep working and it hears exactly what you hear.
 
-First press compiles a small Swift helper into `~/Library/Caches/understory/` (needs the Xcode command line tools: `xcode-select --install`) and triggers the System Audio Recording permission prompt — allow it. Manage the permission later under System Settings → Privacy & Security → Screen & System Audio Recording.
+First press compiles a small Swift helper into `~/Library/Caches/understory/` (needs the Xcode command line tools: `xcode-select --install`) and triggers the System Audio Recording permission prompt — allow it. Manage the permission later under System Settings → Privacy & Security → Screen & System Audio Recording. If you hit "Don't Allow", macOS won't ask again and the bars stay flat — the status line reminds you until audio flows; flip the permission on in that same Settings pane and press `v` again.

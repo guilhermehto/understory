@@ -127,6 +127,7 @@ type model struct {
 	// audio visualizer
 	capturing bool
 	resumeViz bool      // visualizer was on at last quit; Init restarts it
+	permOK    bool      // real audio frames seen once - the TCC prompt was accepted
 	levels    []float64 // smoothed spectrum band levels, 0..1
 	bands     chan audioFrame
 	cancel    context.CancelFunc
@@ -367,6 +368,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case bandsMsg:
+		if !m.permOK {
+			for _, v := range msg {
+				if v > 0 {
+					m.permOK = true
+					break
+				}
+			}
+		}
 		if len(m.levels) != len(msg) {
 			m.levels = make([]float64, len(msg))
 		}
@@ -519,6 +528,9 @@ func (m model) audioStatus() string {
 	case m.audioErr != "":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75")).
 			Render("audio: " + m.audioErr)
+	case m.capturing && !m.permOK:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
+			Render("♪ no signal - denied the permission? System Settings -> Privacy & Security -> Screen & System Audio Recording")
 	case m.capturing:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
 			Render("♪ listening · system audio")
@@ -800,6 +812,7 @@ type persisted struct {
 	CurrentUUID string              `json:"current_uuid,omitempty"`
 	CurrentDesc string              `json:"current_desc,omitempty"`
 	Visualizer  bool                `json:"visualizer,omitempty"`
+	AudioPerm   bool                `json:"audio_perm,omitempty"`
 }
 
 // session snapshots an in-flight timer. Quit acts as pause: the clock doesn't
@@ -845,7 +858,7 @@ func (m model) save() {
 	p := persisted{
 		Stats: m.stats, Links: m.links,
 		CurrentUUID: m.curUUID, CurrentDesc: m.curDesc,
-		Visualizer: m.capturing,
+		Visualizer: m.capturing, AudioPerm: m.permOK,
 	}
 	if sec := int(m.remaining.Round(time.Second) / time.Second); sec > 0 && (m.status == running || m.status == paused) {
 		p.Session = &session{Phase: m.ph, RemainingSec: sec, Cycle: m.cycle}
@@ -863,6 +876,7 @@ func (m model) save() {
 func (m *model) restore(p persisted) {
 	m.curUUID, m.curDesc = p.CurrentUUID, p.CurrentDesc
 	m.resumeViz = p.Visualizer
+	m.permOK = p.AudioPerm
 	s := p.Session
 	if s == nil || s.Phase < focus || s.Phase > longBreak || s.RemainingSec <= 0 {
 		return
