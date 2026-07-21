@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -76,20 +77,25 @@ func TestCreditTasksCurrentPlusDoneBlock(t *testing.T) {
 	}
 }
 
-func TestTaskSwitch(t *testing.T) {
+func TestTaskReconcile(t *testing.T) {
 	cases := []struct {
-		name, old, next   string
-		wantStop, wantSet string
+		name      string
+		active    []string
+		target    string
+		wantStop  []string
+		wantStart bool
 	}{
-		{"first selection", "", "b", "", "b"},
-		{"switch", "a", "b", "a", "b"},
-		{"reselect same is no-op", "a", "a", "", ""},
+		{"first selection, nothing active", nil, "b", nil, true},
+		{"switch from one active", []string{"a"}, "b", []string{"a"}, true},
+		{"reselect already-active is a no-op", []string{"b"}, "b", nil, false},
+		{"drift: stop every stray active", []string{"a", "c"}, "b", []string{"a", "c"}, true},
+		{"target active alongside a stray", []string{"a", "b"}, "b", []string{"a"}, false},
 	}
 	for _, c := range cases {
-		stop, start := taskSwitch(c.old, c.next)
-		if stop != c.wantStop || start != c.wantSet {
-			t.Errorf("%s: taskSwitch(%q,%q)=(%q,%q) want (%q,%q)",
-				c.name, c.old, c.next, stop, start, c.wantStop, c.wantSet)
+		stop, start := taskReconcile(c.active, c.target)
+		if start != c.wantStart || !slices.Equal(stop, c.wantStop) {
+			t.Errorf("%s: taskReconcile(%v,%q)=(%v,%v) want (%v,%v)",
+				c.name, c.active, c.target, stop, start, c.wantStop, c.wantStart)
 		}
 	}
 }

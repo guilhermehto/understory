@@ -230,17 +230,24 @@ func (m *model) reloadTasks() {
 }
 
 // setCurrent switches the actively-tracked task, mirroring the change into
-// Taskwarrior (stop the outgoing task, start the incoming one) so TW's active
-// time reflects the selection.
+// Taskwarrior so its active timer reflects the selection: stop whatever TW
+// currently has running (except the pick) and start the pick if it isn't
+// already. Reading TW's real active set heals drift from a prior quit that left
+// a different task active.
 func (m *model) setCurrent(uuid, desc string) {
-	stop, start := taskSwitch(m.curUUID, uuid)
-	if stop != "" {
-		if err := taskStop(stop); err != nil {
+	active, err := activeTasks()
+	if err != nil {
+		m.taskErr = err.Error()
+		return
+	}
+	stop, start := taskReconcile(active, uuid)
+	for _, u := range stop {
+		if err := taskStop(u); err != nil {
 			m.taskErr = err.Error()
 		}
 	}
-	if start != "" {
-		if err := taskStart(start); err != nil {
+	if start {
+		if err := taskStart(uuid); err != nil {
 			m.taskErr = err.Error()
 			return
 		}

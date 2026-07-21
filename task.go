@@ -44,14 +44,42 @@ func taskDone(uuid string) error { return runTask(uuid, "done") }
 func taskStart(uuid string) error { return runTask(uuid, "start") }
 func taskStop(uuid string) error  { return runTask(uuid, "stop") }
 
-// taskSwitch decides the start/stop side effects of moving the current task
-// from old to new. Empty = skip that call: a no-op switch (same uuid) restarts
-// nothing, and an empty old has nothing to stop.
-func taskSwitch(old, next string) (stop, start string) {
-	if next == old {
-		return "", ""
+// activeTasks returns the uuids Taskwarrior currently has running (+ACTIVE).
+func activeTasks() ([]string, error) {
+	cmd := exec.Command("task", "rc.json.array=on", "rc.verbose=nothing", "+ACTIVE", "export")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, taskErr(stderr.String(), err)
 	}
-	return old, next
+	var ts []twTask
+	if err := json.Unmarshal(out, &ts); err != nil {
+		return nil, err
+	}
+	uuids := make([]string, len(ts))
+	for i, t := range ts {
+		uuids[i] = t.UUID
+	}
+	return uuids, nil
+}
+
+// taskReconcile decides how to make target the sole active task given TW's
+// current active set: stop every active task that isn't target, and start
+// target unless it's already active. Reconciling against TW's real state (not
+// the model's last-known current) keeps reselection idempotent and heals drift
+// left by a prior quit that kept a task active — `task start`/`stop` error
+// (exit 1) when a task is already started / not started, so the guards matter.
+func taskReconcile(active []string, target string) (stop []string, start bool) {
+	start = true
+	for _, u := range active {
+		if u == target {
+			start = false
+		} else {
+			stop = append(stop, u)
+		}
+	}
+	return stop, start
 }
 
 // taskAdd/taskModify pass the raw text through so Taskwarrior parses its own
@@ -66,12 +94,18 @@ func taskModify(uuid, text string) error {
 
 func runTask(args ...string) error {
 	// rc.confirmation=off: no tty is attached, so a confirmation prompt would
-	// hang on EOF.
-	cmd := exec.Command("task", append([]string{"rc.confirmation=off"}, args...)...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	// hang on EOF. rc.verbose=nothing: silence the "Configuration override"
+	// footnote TW writes to stderr, so the real failure message (which TW writes
+	// to stdout) is what surfaces to the UI.
+	cmd := exec.Command("task", append([]string{"rc.confirmation=off", "rc.verbose=nothing"}, args...)...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return taskErr(stderr.String(), err)
+		msg := strings.TrimSpace(stdout.String())
+		if msg == "" {
+			msg = stderr.String()
+		}
+		return taskErr(msg, err)
 	}
 	return nil
 }
