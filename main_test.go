@@ -76,6 +76,24 @@ func TestCreditTasksCurrentPlusDoneBlock(t *testing.T) {
 	}
 }
 
+func TestTaskSwitch(t *testing.T) {
+	cases := []struct {
+		name, old, next   string
+		wantStop, wantSet string
+	}{
+		{"first selection", "", "b", "", "b"},
+		{"switch", "a", "b", "a", "b"},
+		{"reselect same is no-op", "a", "a", "", ""},
+	}
+	for _, c := range cases {
+		stop, start := taskSwitch(c.old, c.next)
+		if stop != c.wantStop || start != c.wantSet {
+			t.Errorf("%s: taskSwitch(%q,%q)=(%q,%q) want (%q,%q)",
+				c.name, c.old, c.next, stop, start, c.wantStop, c.wantSet)
+		}
+	}
+}
+
 func TestDecodeStateMigratesOldFormat(t *testing.T) {
 	old := []byte(`{"total":10,"today":3,"date":"` + today() + `"}`)
 	p := decodeState(old)

@@ -38,6 +38,22 @@ func listTasks() ([]twTask, error) {
 
 func taskDone(uuid string) error { return runTask(uuid, "done") }
 
+// taskStart/taskStop mirror the current-task selection into Taskwarrior's
+// built-in active timer. `task done` clears an active timer on its own, so the
+// done path needs no explicit stop.
+func taskStart(uuid string) error { return runTask(uuid, "start") }
+func taskStop(uuid string) error  { return runTask(uuid, "stop") }
+
+// taskSwitch decides the start/stop side effects of moving the current task
+// from old to new. Empty = skip that call: a no-op switch (same uuid) restarts
+// nothing, and an empty old has nothing to stop.
+func taskSwitch(old, next string) (stop, start string) {
+	if next == old {
+		return "", ""
+	}
+	return old, next
+}
+
 // taskAdd/taskModify pass the raw text through so Taskwarrior parses its own
 // inline syntax (project:x, +tag). Fields() splits into argv; TW rejoins.
 func taskAdd(text string) error {
